@@ -6,12 +6,11 @@ import (
 
 type Config struct {
 	Debug              bool
-	Storage            string
-	KeyValConfig       *KeyValCfg
+	ValkeyCfg          *ValkeyCfg
 	InstrumentationCfg *InstrumentationCfg
 }
 
-type KeyValCfg struct {
+type ValkeyCfg struct {
 	URL           string
 	UseSsl        bool
 	TLSDomain     string

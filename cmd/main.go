@@ -8,8 +8,7 @@ import (
 
 func main() {
 	client, err := sdk.Init(&sdk.Config{
-		Storage: "valkey",
-		KeyValConfig: &sdk.KeyValCfg{
+		ValkeyCfg: &sdk.ValkeyCfg{
 			URL:           "valkey://localhost:6379/0",
 			UseSsl:        false,
 			TLSDomain:     "",
