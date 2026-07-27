@@ -1,0 +1,65 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="Eslint" enabled="true" level="WARNING" enabled_by_default="true" />
+    <inspection_tool class="PyPackageRequirementsInspection" enabled="false" level="WARNING" enabled_by_default="false">
+      <option name="ignoredPackages">
+        <list>
+          <option value="urllib3" />
+          <option value="certifi" />
+          <option value="aiohttp" />
+          <option value="anthropic" />
+          <option value="arq" />
+          <option value="asyncpg" />
+          <option value="apache-beam" />
+          <option value="bottle" />
+          <option value="celery" />
+          <option value="celery-redbeat" />
+          <option value="chalice" />
+          <option value="clickhouse-driver" />
+          <option value="django" />
+          <option value="falcon" />
+          <option value="fastapi" />
+          <option value="flask" />
+          <option value="blinker" />
+          <option value="markupsafe" />
+          <option value="grpcio" />
+          <option value="protobuf" />
+          <option value="httpcore" />
+          <option value="httpx" />
+          <option value="huey" />
+          <option value="huggingface_hub" />
+          <option value="langchain" />
+          <option value="launchdarkly-server-sdk" />
+          <option value="litestar" />
+          <option value="loguru" />
+          <option value="openai" />
+          <option value="tiktoken" />
+          <option value="openfeature-sdk" />
+          <option value="opentelemetry-distro" />
+          <option value="pure_eval" />
+          <option value="executing" />
+          <option value="asttokens" />
+          <option value="pymongo" />
+          <option value="pyspark" />
+          <option value="quart" />
+          <option value="rq" />
+          <option value="sanic" />
+          <option value="sqlalchemy" />
+          <option value="starlette" />
+          <option value="starlite" />
+          <option value="statsig" />
+          <option value="tornado" />
+          <option value="UnleashClient" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N803" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
