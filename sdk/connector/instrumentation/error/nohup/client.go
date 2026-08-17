@@ -7,7 +7,7 @@ import (
 
 type Impl struct{}
 
-func New(_ *sdk.Config) (*Impl, func(), error) {
+func New(_ *sdk.Opts) (*Impl, func(), error) {
 	log := sdk.GetAppLogger()
 	log.Info("nohup error reporting init")
 

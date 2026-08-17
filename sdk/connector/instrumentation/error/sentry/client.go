@@ -7,7 +7,7 @@ import (
 
 type Impl struct{}
 
-func New(config *sdk.Config) (*Impl, func(), error) {
+func New(config *sdk.Opts) (*Impl, func(), error) {
 	if config.InstrumentationCfg == nil || config.Debug {
 		return &Impl{}, func() {}, nil
 	}
