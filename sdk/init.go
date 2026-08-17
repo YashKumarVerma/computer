@@ -40,6 +40,7 @@ func Init(cfg *Opts) (*Client, error) {
 	keyValStore, err := storage.New(&storage.StoreOpts{ConnStr: cfg.KeyValConnStr})
 	if err != nil {
 		logger.Error("error initializing storage", zap.Error(err))
+		return nil, err
 	}
 
 	return &Client{
@@ -59,7 +60,6 @@ func Init(cfg *Opts) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) Close() error {
+func (c *Client) Close() {
 	GetAppLogger().Info("closing client")
-	return nil
 }
