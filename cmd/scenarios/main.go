@@ -36,6 +36,8 @@ func main() {
 		Name:       "sendMoney",
 		EvalWindow: time.Minute * 1,
 		Resolution: time.Second * 5,
+		// Closed set of slices we're allowed to break failure rate down by.
+		Dimensions: []string{"bank", "psp", "router"},
 	})
 
 	walletLoadOperation := client.RegisterOperation(&sdk.NewOpsOpts{
@@ -47,30 +49,53 @@ func main() {
 
 	go client.RunMetricServer()
 
-	// Drive steady traffic so /metrics and SuccessRate keep moving.
-	go drive(sendMoneyOperation, 90)  // ~90% success
-	go drive(walletLoadOperation, 70) // ~70% success
+	// walletLoad: plain ~70% success, no dimensions.
+	go drive(walletLoadOperation, func() (sdk.Dims, bool) {
+		return nil, rand.IntN(100) < 70
+	})
 
-	// Print the computed rate every 5s so you can eyeball it against /metrics.
+	// sendMoney: every attempt routes through a bank/psp/router; bankC is
+	// degraded (~60% vs ~95%) so the marginal slice actually diverges.
+	bankHealth := map[string]int{"bankA": 95, "bankB": 92, "bankC": 60}
+	banks := []string{"bankA", "bankB", "bankC"}
+	psps := []string{"psp1", "psp2"}
+	routers := []string{"r1", "r2"}
+	go drive(sendMoneyOperation, func() (sdk.Dims, bool) {
+		bank := banks[rand.IntN(len(banks))]
+		dims := sdk.Dims{
+			"bank":   bank,
+			"psp":    psps[rand.IntN(len(psps))],
+			"router": routers[rand.IntN(len(routers))],
+		}
+		return dims, rand.IntN(100) < bankHealth[bank]
+	})
+
+	// Print overall + the per-bank slices every 5s. bankC should read visibly
+	// lower than the overall sendMoney rate.
 	ctx := context.Background()
 	for range time.Tick(5 * time.Second) {
 		sm, _ := sendMoneyOperation.SuccessRate(ctx)
+		a, _ := sendMoneyOperation.SuccessRateBy(ctx, "bank", "bankA")
+		b, _ := sendMoneyOperation.SuccessRateBy(ctx, "bank", "bankB")
+		c, _ := sendMoneyOperation.SuccessRateBy(ctx, "bank", "bankC")
 		wl, _ := walletLoadOperation.SuccessRate(ctx)
-		fmt.Printf("sendMoney=%.2f walletLoad=%.2f\n", sm, wl)
+		fmt.Printf("sendMoney=%.2f [bankA=%.2f bankB=%.2f bankC=%.2f]  walletLoad=%.2f\n",
+			sm, a, b, c, wl)
 	}
 }
 
-// drive records events forever at ~pct% success, a handful per second. Each
-// event is an independent Bernoulli trial, so outcomes aren't correlated in
-// time and the measured rate stays close to pct across window boundaries.
-func drive(op *sdk.Operation, pct int) {
+// drive records events forever, a handful per second. next() returns the
+// dimensions to tag each event with and whether it succeeded; each call is
+// independent so the measured rate stays close to target across window edges.
+func drive(op *sdk.Operation, next func() (sdk.Dims, bool)) {
 	ctx := context.Background()
 	for range time.Tick(200 * time.Millisecond) {
+		dims, success := next()
 		var err error
-		if rand.IntN(100) < pct { // independent Bernoulli trial, ~pct% success
-			err = op.RecordSuccess(ctx, time.Now())
+		if success {
+			err = op.RecordSuccess(ctx, time.Now(), dims)
 		} else {
-			err = op.RecordFailure(ctx, time.Now())
+			err = op.RecordFailure(ctx, time.Now(), dims)
 		}
 		if err != nil {
 			fmt.Println("record error:", err)
