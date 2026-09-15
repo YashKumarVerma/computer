@@ -36,8 +36,8 @@ func main() {
 		Name:       "sendMoney",
 		EvalWindow: time.Minute * 1,
 		Resolution: time.Second * 5,
-		// Closed set of slices we're allowed to break failure rate down by.
 		Dimensions: []string{"bank", "psp", "router"},
+		Eval:       sendMoneyEval,
 	})
 
 	walletLoadOperation := client.RegisterOperation(&sdk.NewOpsOpts{
@@ -55,32 +55,62 @@ func main() {
 	})
 
 	// sendMoney: every attempt routes through a bank/psp/router; bankC is
-	// degraded (~60% vs ~95%) so the marginal slice actually diverges.
+	// degraded (~60% vs ~95%) so the marginal slice actually diverges. Unlike
+	// walletLoad, this emits a typed payload and lets the operation's Eval
+	// derive the verdict — exercising the predicate + guard path.
 	bankHealth := map[string]int{"bankA": 95, "bankB": 92, "bankC": 60}
 	banks := []string{"bankA", "bankB", "bankC"}
 	psps := []string{"psp1", "psp2"}
 	routers := []string{"r1", "r2"}
-	go drive(sendMoneyOperation, func() (sdk.Dims, bool) {
+	go driveEval(sendMoneyOperation, func() (sdk.Dims, interface{}) {
 		bank := banks[rand.IntN(len(banks))]
 		dims := sdk.Dims{
 			"bank":   bank,
 			"psp":    psps[rand.IntN(len(psps))],
 			"router": routers[rand.IntN(len(routers))],
 		}
-		return dims, rand.IntN(100) < bankHealth[bank]
+		status := "success"
+		if rand.IntN(100) >= bankHealth[bank] {
+			status = "failed"
+		}
+		return dims, SendMoneyResp{Status: status}
 	})
 
-	// Print overall + the per-bank slices every 5s. bankC should read visibly
-	// lower than the overall sendMoney rate.
+	// Print the overall failure rate plus the failure rate spread across every
+	// registered dimension value every 5s — no hardcoded bank list, the SDK
+	// enumerates the values it has seen. bankC should read visibly worse. The
+	// same numbers are on /metrics as internal_operation_failure_rate.
 	ctx := context.Background()
 	for range time.Tick(5 * time.Second) {
-		sm, _ := sendMoneyOperation.SuccessRate(ctx)
-		a, _ := sendMoneyOperation.SuccessRateBy(ctx, "bank", "bankA")
-		b, _ := sendMoneyOperation.SuccessRateBy(ctx, "bank", "bankB")
-		c, _ := sendMoneyOperation.SuccessRateBy(ctx, "bank", "bankC")
-		wl, _ := walletLoadOperation.SuccessRate(ctx)
-		fmt.Printf("sendMoney=%.2f [bankA=%.2f bankB=%.2f bankC=%.2f]  walletLoad=%.2f\n",
-			sm, a, b, c, wl)
+		sm, _ := sendMoneyOperation.FailureRate(ctx)
+		spread, _ := sendMoneyOperation.FailureRates(ctx)
+		wl, _ := walletLoadOperation.FailureRate(ctx)
+		fmt.Printf("sendMoney fail=%.2f %v  walletLoad fail=%.2f\n", sm, spread, wl)
+	}
+}
+
+// SendMoneyResp is the downstream's typed response. sendMoneyEval is a
+// code-verdict predicate over it (design doc §7.2, the proto/gRPC default): a
+// wrong type or nil-deref panics, and the SDK's guard turns that into SUCCESS
+// plus an eval-error metric rather than blocking traffic on our own bug.
+type SendMoneyResp struct {
+	Status string
+	Code   int
+}
+
+func sendMoneyEval(v interface{}) bool {
+	return v.(SendMoneyResp).Status == "success"
+}
+
+// driveEval is drive's payload-based twin: next() returns a payload the
+// operation's Eval scores, instead of a precomputed bool.
+func driveEval(op *sdk.Operation, next func() (sdk.Dims, interface{})) {
+	ctx := context.Background()
+	for range time.Tick(200 * time.Millisecond) {
+		dims, payload := next()
+		if err := op.Record(ctx, time.Now(), payload, dims); err != nil {
+			fmt.Println("record error:", err)
+		}
 	}
 }
 

@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -21,11 +22,8 @@ type NewOpsOpts struct {
 	Name       string
 	EvalWindow time.Duration
 	Resolution time.Duration
-	// Dimensions is the closed set of slice names this operation may be tagged
-	// with (e.g. "bank", "psp", "router"). Declaring them up front caps key
-	// cardinality: only these names ever become counters, so a stray high-
-	// cardinality tag (userID, txnID) can't explode the keyspace.
 	Dimensions []string
+	Eval       func(interface{}) bool
 }
 
 // Dims tags a single event with dimension values, e.g.
@@ -41,6 +39,16 @@ type Operation struct {
 	store      storage.Storage // todo: find a better way, feels counter intuitive
 	metric     *prometheus.CounterVec
 	dimensions map[string]struct{}
+	eval       func(interface{}) bool
+
+	// seen is the set of values observed per dimension, so FailureRates can
+	// spread over the values actually in play without the caller enumerating
+	// them. Populated on write.
+	// ponytail: in-memory, per-instance, never pruned — assumes bounded value
+	// cardinality (banks, psps). If values are unbounded, prune values whose
+	// buckets have all expired.
+	mu   sync.Mutex
+	seen map[string]map[string]struct{}
 }
 
 func (o *Operation) bucket(ts time.Time) int64 {
@@ -81,7 +89,27 @@ func (o *Operation) record(ctx context.Context, ts time.Time, outcome Outcome, d
 			return err
 		}
 	}
+	o.observe(dims)
 	return nil
+}
+
+// observe remembers which values have been seen per dimension so FailureRates
+// can iterate them later. Lazy-inits so struct-literal Operations (tests) work.
+func (o *Operation) observe(dims Dims) {
+	if len(dims) == 0 {
+		return
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.seen == nil {
+		o.seen = make(map[string]map[string]struct{})
+	}
+	for dim, val := range dims {
+		if o.seen[dim] == nil {
+			o.seen[dim] = make(map[string]struct{})
+		}
+		o.seen[dim][val] = struct{}{}
+	}
 }
 
 // rate scans the eval window's buckets using key to build each lookup, and
@@ -136,6 +164,43 @@ func (o *Operation) SuccessRateBy(ctx context.Context, dim, val string) (float64
 	})
 }
 
+// FailureRate is 1 - SuccessRate over the whole window. No traffic reads as
+// 0.0 failure (SuccessRate returns 1.0 on silence), so a breaker doesn't trip
+// on an idle operation.
+func (o *Operation) FailureRate(ctx context.Context) (float64, error) {
+	s, err := o.SuccessRate(ctx)
+	return 1 - s, err
+}
+
+// FailureRates returns the current eval-window failure rate for every value
+// observed on every registered dimension, keyed dimension -> value -> rate.
+// This is the "spread across dimensions" view the caller would otherwise have
+// to assemble by guessing values and calling SuccessRateBy per value.
+func (o *Operation) FailureRates(ctx context.Context) (map[string]map[string]float64, error) {
+	// Snapshot the seen-set under the lock, then do the store reads without it.
+	o.mu.Lock()
+	snapshot := make(map[string][]string, len(o.seen))
+	for dim, vals := range o.seen {
+		for val := range vals {
+			snapshot[dim] = append(snapshot[dim], val)
+		}
+	}
+	o.mu.Unlock()
+
+	out := make(map[string]map[string]float64, len(snapshot))
+	for dim, vals := range snapshot {
+		out[dim] = make(map[string]float64, len(vals))
+		for _, val := range vals {
+			s, err := o.SuccessRateBy(ctx, dim, val)
+			if err != nil {
+				return nil, err
+			}
+			out[dim][val] = 1 - s
+		}
+	}
+	return out, nil
+}
+
 func (c *Client) RegisterOperation(opts *NewOpsOpts) *Operation {
 	dims := make(map[string]struct{}, len(opts.Dimensions))
 	for _, d := range opts.Dimensions {
@@ -150,8 +215,35 @@ func (c *Client) RegisterOperation(opts *NewOpsOpts) *Operation {
 		metric:     c.metricOps,
 		dimensions: dims,
 	}
+	// Wrap the caller's predicate once at registration so the fail-to-success
+	// + eval-error policy (design doc §7.3/§7.4) is enforced for every Record,
+	// not left to each predicate to remember. Nil Eval => Record is unusable;
+	// such operations use RecordSuccess/RecordFailure with a verdict in hand.
+	if opts.Eval != nil {
+		ops.eval = guard(opts.Eval, func() {
+			c.metricEvalErr.WithLabelValues(opts.NameSpace.Name, opts.Name).Inc()
+		})
+	}
 	c.state.Operations[opts.NameSpace][opts.Name] = ops
 	return ops
+}
+
+// Record runs the operation's predicate on payload and records the outcome. The
+// predicate is guarded, so this never returns a predicate error — only a store
+// error. Coexists with RecordSuccess/RecordFailure for callers that already
+// hold the verdict.
+func (o *Operation) Record(ctx context.Context, ts time.Time, payload interface{}, dims Dims) error {
+	if time.Since(ts) > o.EvalWindow {
+		return nil
+	}
+	if o.eval == nil {
+		return fmt.Errorf("%w: %q has no Eval; use RecordSuccess/RecordFailure", ErrNoEval, o.Name)
+	}
+	outcome := OutcomeFailure
+	if o.eval(payload) {
+		outcome = OutcomeSuccess
+	}
+	return o.record(ctx, ts, outcome, dims)
 }
 
 func (o *Operation) RecordSuccess(ctx context.Context, ts time.Time, dims Dims) error {

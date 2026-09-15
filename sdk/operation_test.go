@@ -151,6 +151,62 @@ func TestSuccessRate(t *testing.T) {
 		}
 	})
 
+	// FailureRates spreads over the values seen per dimension with no caller-
+	// supplied value list, and each rate is 1 - the per-value success rate.
+	t.Run("failure rates spread across observed dimension values", func(t *testing.T) {
+		op := newOp(&fakeStore{m: map[string]int64{}})
+		now := time.Now()
+		// bankA: 3 success / 1 failure -> 0.25 failure. bankB: 1/1 -> 0.5.
+		for range 3 {
+			if err := op.RecordSuccess(ctx, now, Dims{"bank": "bankA"}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, d := range []Dims{{"bank": "bankA"}, {"bank": "bankB"}} {
+			if err := op.RecordFailure(ctx, now, d); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := op.RecordSuccess(ctx, now, Dims{"bank": "bankB"}); err != nil {
+			t.Fatal(err)
+		}
+
+		rates, err := op.FailureRates(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bank := rates["bank"]
+		if len(bank) != 2 {
+			t.Fatalf("want 2 observed bank values, got %v", bank)
+		}
+		if bank["bankA"] != 0.25 {
+			t.Fatalf("bankA failure: want 0.25, got %v", bank["bankA"])
+		}
+		if bank["bankB"] != 0.5 {
+			t.Fatalf("bankB failure: want 0.5, got %v", bank["bankB"])
+		}
+	})
+
+	// No traffic reads as zero failure (SuccessRate is 1.0 on silence) and an
+	// operation nobody has tagged yet spreads to nothing, not a panic.
+	t.Run("failure rate on silence is zero and empty spread", func(t *testing.T) {
+		op := newOp(&fakeStore{m: map[string]int64{}})
+		fr, err := op.FailureRate(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fr != 0 {
+			t.Fatalf("silent failure rate: want 0, got %v", fr)
+		}
+		rates, err := op.FailureRates(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(rates) != 0 {
+			t.Fatalf("want empty spread with no traffic, got %v", rates)
+		}
+	})
+
 	// Undeclared dimensions are rejected on both write and read so cardinality
 	// stays bounded to what was registered.
 	t.Run("undeclared dimension is rejected", func(t *testing.T) {

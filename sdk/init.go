@@ -31,6 +31,7 @@ type Client struct {
 	store          storage.Storage
 	metricRegistry *prometheus.Registry
 	metricOps      *prometheus.CounterVec
+	metricEvalErr  *prometheus.CounterVec
 }
 
 func Init(cfg *Opts) (*Client, error) {
@@ -43,7 +44,7 @@ func Init(cfg *Opts) (*Client, error) {
 		return nil, err
 	}
 
-	return &Client{
+	c := &Client{
 		config: cfg,
 		logger: GetAppLogger(),
 		state: state{
@@ -57,7 +58,20 @@ func Init(cfg *Opts) (*Client, error) {
 			Name:      "invocation",
 			Help:      "number of invoked operations",
 		}, []string{"namespace", "operation", "outcome"}),
-	}, nil
+		// Design doc §7.4: eval errors are emitted independently of the
+		// success/fail stream so a broken predicate (which reads as 100%
+		// success) stays visible instead of silently sleeping the breaker.
+		metricEvalErr: promauto.With(metricRegistry).NewCounterVec(prometheus.CounterOpts{
+			Namespace: "internal",
+			Subsystem: "operation",
+			Name:      "eval_error",
+			Help:      "predicate errors recovered and treated as success",
+		}, []string{"namespace", "operation"}),
+	}
+	// Failure rate is a derived value, so it's a scrape-time collector rather
+	// than a counter incremented on the write path.
+	metricRegistry.MustRegister(newFailureRateCollector(c))
+	return c, nil
 }
 
 func (c *Client) Close() {

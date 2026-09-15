@@ -6,4 +6,5 @@ var (
 	ErrNotFound         = errors.New("storage: key not found")
 	ErrWrongType        = errors.New("storage: value is not of the requested type")
 	ErrUnknownDimension = errors.New("operation: dimension not declared at registration")
+	ErrNoEval           = errors.New("operation: Record called on an operation with no Eval")
 )
