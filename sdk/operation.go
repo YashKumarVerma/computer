@@ -259,3 +259,14 @@ func (o *Operation) RecordFailure(ctx context.Context, ts time.Time, dims Dims) 
 	}
 	return o.record(ctx, ts, OutcomeFailure, dims)
 }
+
+// Success and Fail are the integration surface: an external caller records the
+// outcome of a just-completed call, no timestamp to supply. Pass nil dims when
+// the operation has no dimensions.
+func (o *Operation) Success(ctx context.Context, dims Dims) error {
+	return o.record(ctx, time.Now(), OutcomeSuccess, dims)
+}
+
+func (o *Operation) Fail(ctx context.Context, dims Dims) error {
+	return o.record(ctx, time.Now(), OutcomeFailure, dims)
+}

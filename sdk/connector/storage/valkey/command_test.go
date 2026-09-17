@@ -111,10 +111,15 @@ func TestGetNumber(t *testing.T) {
 		}
 	})
 
-	t.Run("missing key returns error", func(t *testing.T) {
-		_, err := impl.GetNumber(ctx, "nonexistent_key_xyz")
-		if err == nil {
-			t.Fatal("expected error for missing key")
+	t.Run("missing key reads as zero", func(t *testing.T) {
+		// A missing bucket means no events, not a backend failure — the rate
+		// read path sums across buckets and relies on this being (0, nil).
+		val, err := impl.GetNumber(ctx, "nonexistent_key_xyz")
+		if err != nil {
+			t.Fatalf("want nil error for missing key, got %v", err)
+		}
+		if val != 0 {
+			t.Fatalf("want 0 for missing key, got %d", val)
 		}
 	})
 }
